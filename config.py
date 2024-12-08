@@ -1,0 +1,6 @@
+SYMBOL = 'SOL/USDT'
+BENCHMARK_SYMBOL = 'BTC/USDT'
+TIMEFRAME = '1h'
+ACTIVE_STRATEGY = 'RRS'
+RRS_BUY_THRESHOLD = 1.1
+RRS_SELL_THRESHOLD = 0.9  # Added a sell threshold for completeness
