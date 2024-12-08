@@ -9,5 +9,5 @@
 # CMO Strategy
 # Volume spike trading bot
 # klinko bt, trix bt, wma bt, wma cross, flux bt, flux vwap, kama heiken
-# PSAR
+# PSAR, HBAR, btt over rss ma, bt under rss, 
 # Privatus-projektas-mj
