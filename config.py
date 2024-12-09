@@ -7,7 +7,7 @@ class Config:
 
     # Logging configuration
     LOG_FILE = "logs/data_fetcher.log"
-    DEBUG_MODE = True  # Set to False in production
+    DEBUG_MODE = False  # Set to False in production
 
     # Default trading pairs and time settings
     SYMBOL = "SOLUSDT"  # Main symbol to fetch data for
@@ -37,10 +37,13 @@ class Config:
     # Derived settings
     @staticmethod
     def create_directories():
+        """
+        Create necessary directories for logs and output.
+        """
         import os
         try:
-            # Ensure directories exist for logs and output
-            if not os.path.exists(Config.LOG_FILE):
+        # Ensure directories exist for logs and output
+            if not os.path.exists(os.path.dirname(Config.LOG_FILE)):
                 os.makedirs(os.path.dirname(Config.LOG_FILE), exist_ok=True)
             if Config.SAVE_CSV and not os.path.exists(Config.OUTPUT_DIR):
                 os.makedirs(Config.OUTPUT_DIR, exist_ok=True)

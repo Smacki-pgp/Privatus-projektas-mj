@@ -1,106 +1,128 @@
 import pandas as pd
+import numpy as np
+import logging
+import os
+from config import Config
 
-class DataProcessor:
-    def __init__(self, df_asset, df_benchmark):
-        """
-        Initializes the DataProcessor with asset and benchmark data.
+# Set up logging for the data processor
+log_dir = Config.OUTPUT_DIR
+if log_dir and not os.path.exists(log_dir):
+    os.makedirs(log_dir)
 
-        :param df_asset: DataFrame containing the asset's OHLCV data.
-        :param df_benchmark: DataFrame containing the benchmark's OHLCV data.
-        """
-        self.df_asset = df_asset
-        self.df_benchmark = df_benchmark
+logging.basicConfig(
+    filename=os.path.join(Config.OUTPUT_DIR, "data_processor.log"),
+    level=logging.DEBUG if Config.DEBUG_MODE else logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filemode="a"
+)
 
-    def calculate_indicators(self):
-        """
-        Calculates indicators and merges asset and benchmark data.
+def validate_columns(df, required_columns):
+    """
+    Validate that the DataFrame contains required columns.
+    """
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
 
-        :return: Merged DataFrame with calculated indicators.
-        """
-        try:
-            # Validate inputs
-            if self.df_asset.empty or self.df_benchmark.empty:
-                raise ValueError("Input dataframes cannot be empty.")
+def add_moving_averages(df, short_window=10, long_window=50):
+    """
+    Adds moving average columns to the DataFrame.
 
-            # Sort dataframes by index
-            self.df_asset.sort_index(inplace=True)
-            self.df_benchmark.sort_index(inplace=True)
+    :param df: Input DataFrame with 'close' prices.
+    :param short_window: Window size for the short moving average.
+    :param long_window: Window size for the long moving average.
+    :return: DataFrame with 'SMA_short' and 'SMA_long' columns added.
+    """
+    try:
+        df[f"SMA_{short_window}"] = df['close'].rolling(window=short_window).mean()
+        df[f"SMA_{long_window}"] = df['close'].rolling(window=long_window).mean()
+        return df
+    except Exception as e:
+        logging.error(f"Error adding moving averages: {e}")
+        raise
 
-            # Ensure necessary columns exist
-            required_columns = {'close'}
-            if not required_columns.issubset(self.df_asset.columns):
-                raise ValueError(f"Asset DataFrame is missing required columns: {required_columns - set(self.df_asset.columns)}")
-            if not required_columns.issubset(self.df_benchmark.columns):
-                raise ValueError(f"Benchmark DataFrame is missing required columns: {required_columns - set(self.df_benchmark.columns)}")
+def add_rsi(df, window=14):
+    """
+    Adds a Relative Strength Index (RSI) column to the DataFrame.
 
-            # Merge the asset and benchmark data on the closest timestamps
-            merged_data = pd.merge_asof(
-                self.df_asset,
-                self.df_benchmark,
-                left_index=True,
-                right_index=True,
-                suffixes=('_asset', '_benchmark')
-            )
+    :param df: Input DataFrame with 'close' prices.
+    :param window: Window size for calculating RSI.
+    :return: DataFrame with 'RSI' column added.
+    """
+    try:
+        delta = df['close'].diff()
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
 
-            # Calculate Relative Return Strength (RRS)
-            merged_data['RRS'] = merged_data['close_asset'] / merged_data['close_benchmark']
+        avg_gain = pd.Series(gain).rolling(window=window).mean()
+        avg_loss = pd.Series(loss).rolling(window=window).mean()
+        
+        rs = avg_gain / avg_loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        return df
+    except Exception as e:
+        logging.error(f"Error adding RSI: {e}")
+        raise
 
-            # Debugging output
-            print("Processed Data:")
-            print(merged_data.head())
+def process_data(df):
+    """
+    Main function to process raw OHLCV data. Includes:
+    - Adding moving averages
+    - Adding RSI
 
-            return merged_data
-        except Exception as e:
-            print(f"Error calculating indicators: {e}")
-            return pd.DataFrame()
+    :param df: Input DataFrame with raw OHLCV data.
+    :return: Processed DataFrame with additional technical indicators.
+    """
+    try:
+        logging.info("Starting data processing...")
+        
+        # Validate required columns
+        validate_columns(df, ['close'])
 
-    def normalize_data(self, df):
-        """
-        Normalizes data to make it suitable for strategy development.
+        # Add moving averages
+        df = add_moving_averages(df, short_window=10, long_window=50)
+        
+        # Add RSI
+        df = add_rsi(df, window=14)
 
-        :param df: DataFrame to normalize.
-        :return: Normalized DataFrame.
-        """
-        try:
-            if df.empty:
-                raise ValueError("Dataframe cannot be empty for normalization.")
+        logging.info("Data processing completed successfully.")
+        return df
+    except Exception as e:
+        logging.error(f"Error in process_data: {e}")
+        raise
 
-            for column in ['open', 'high', 'low', 'close', 'volume']:
-                if column in df.columns and df[column].std() != 0:
-                    df[column] = (df[column] - df[column].mean()) / df[column].std()
+def save_processed_data(df, symbol):
+    """
+    Save the processed data to a CSV file.
 
-            # Debugging output
-            print("Normalized Data:")
-            print(df.head())
-
-            return df
-        except Exception as e:
-            print(f"Error normalizing data: {e}")
-            return pd.DataFrame()
+    :param df: Processed DataFrame.
+    :param symbol: Trading pair symbol (e.g., 'SOLUSDT').
+    """
+    try:
+        output_file = os.path.join(Config.OUTPUT_DIR, f"{symbol}_processed_data.csv")
+        df.to_csv(output_file, index=True)
+        logging.info(f"Processed data saved to {output_file}.")
+    except Exception as e:
+        logging.error(f"Error saving processed data for {symbol}: {e}")
 
 if __name__ == "__main__":
-    # Example datasets
-    df_asset = pd.DataFrame({
-        'close': [100, 102, 101, 103, 105],
-        'open': [99, 101, 100, 102, 104],
-        'high': [101, 103, 102, 104, 106],
-        'low': [98, 100, 99, 101, 103],
-        'volume': [1000, 1500, 1200, 1300, 1600]
-    }, index=pd.date_range(start='2023-01-01', periods=5, freq='D'))
+    try:
+        # Example usage: Load raw data and process it
+        input_file = os.path.join(Config.OUTPUT_DIR, f"{Config.SYMBOL}_data.csv")
 
-    df_benchmark = pd.DataFrame({
-        'close': [200, 202, 201, 203, 205],
-        'open': [199, 201, 200, 202, 204],
-        'high': [201, 203, 202, 204, 206],
-        'low': [198, 200, 199, 201, 203],
-        'volume': [2000, 2500, 2200, 2300, 2600]
-    }, index=pd.date_range(start='2023-01-01', periods=5, freq='D'))
+        if not os.path.exists(input_file):
+            logging.error(f"Input file {input_file} does not exist. Ensure `data_fetcher.py` has saved data correctly.")
+        else:
+            raw_data = pd.read_csv(input_file, index_col='timestamp', parse_dates=True)
 
-    processor = DataProcessor(df_asset, df_benchmark)
-    processed_data = processor.calculate_indicators()
-    normalized_data = processor.normalize_data(processed_data)
+            if raw_data.empty:
+                logging.warning(f"Input file {input_file} is empty. No processing performed.")
+            else:
+                logging.info(f"Loaded raw data with {len(raw_data)} rows.")
+                processed_data = process_data(raw_data)
 
-    print("Merged Data:")
-    print(processed_data)
-    print("\nNormalized Data:")
-    print(normalized_data)
+                # Save processed data
+                save_processed_data(processed_data, Config.SYMBOL)
+
+    except Exception as e:
+        logging.error(f"Error in main execution: {e}")
