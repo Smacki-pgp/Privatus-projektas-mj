@@ -84,7 +84,7 @@ def fetch_data(symbol, start_date, end_date, interval=Config.TIMEFRAME):
                 # Break loop if no data is returned
                 if not klines:
                     logging.warning(f"No data returned for symbol {symbol} in this time range.")
-                    break
+                    return pd.DataFrame()
 
                 # Add the fetched data to the list
                 all_data.extend(klines)
@@ -104,20 +104,20 @@ def fetch_data(symbol, start_date, end_date, interval=Config.TIMEFRAME):
                 # Handle Binance-specific errors, including rate limits
                 if api_error.code == -1003:  # Rate limit error
                     logging.error("Rate limit exceeded. Retrying after delay...")
-                    time.sleep(60)  # Wait for 60 seconds before retrying
+                    time.sleep(min(60 * 2 ** retry_count, 600))  # Exponential backoff with a cap
                 else:
                     logging.error(f"Binance API error: {api_error}")
                     retry_count += 1
                     if retry_count >= Config.MAX_API_RETRIES:
                         logging.error(f"Max retries reached for {symbol}. Aborting.")
-                        break
+                        return pd.DataFrame()
             except Exception as e:
                 # Handle general errors and implement retry logic
                 logging.error(f"Error during Binance API call: {e}")
                 retry_count += 1
                 if retry_count >= Config.MAX_API_RETRIES:
                     logging.error(f"Max retries reached for {symbol}. Aborting.")
-                    break
+                    return pd.DataFrame()
 
         # Step 4: Convert fetched data to a DataFrame for processing
         try:
@@ -154,7 +154,7 @@ def fetch_data(symbol, start_date, end_date, interval=Config.TIMEFRAME):
 
             # Step 5: Check for missing or inconsistent data
             if df.isnull().values.any():
-                logging.warning(f"DataFrame for {symbol} contains missing values.")
+                logging.warning(f"DataFrame for {symbol} contains missing values. Consider handling them explicitly.")
 
             return df
 
@@ -191,10 +191,14 @@ def fetch_multiple_symbols(symbols, start_date, end_date):
             symbol = futures[future]
             logging.info(f"Starting data fetch for {symbol} from {start_date} to {end_date}.")  # Log the start of fetching with time range
             try:
-                results[symbol] = future.result()
-                # Debugging: Validate fetched data
-                if Config.DEBUG_MODE and not results[symbol].empty:
-                    logging.debug(f"Data fetched for {symbol}: {len(results[symbol])} rows.")
+                result = future.result()
+                if result.empty:
+                    logging.warning(f"No data fetched for {symbol}.")
+                else:
+                    results[symbol] = result
+                    # Debugging: Validate fetched data
+                    if Config.DEBUG_MODE:
+                        logging.debug(f"Data fetched for {symbol}: {len(result)} rows.")
             except Exception as e:
                 # Log errors encountered during concurrent fetching
                 logging.error(f"Error fetching data for {symbol}: {e}")
