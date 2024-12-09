@@ -15,4 +15,25 @@
 ## Binance API credentials
 # API_KEY = 'yhsdzPJNebDuyxoFsHEZQ32Zuo5grZCvlqhShJilQVBvvSApe4tnVGdl94TsU32CO'
 # API_SECRET = 'sluOlqJuqstECUXIFQYAiXGpUA08QPGQ6jERRx1ZglSvGYE4ghwsrub3btdQcCgR'
-#
+        "Duration",
+        "Exposure Time %",
+        "Equity Final",
+        "Equity Peak",
+        "Return %",
+        "Buy and Hold Return %",
+        "Return Annual %",
+        "Volatility Annual %",
+        "Sharpe Ratio",
+        "Sortino Ratio",
+        "Calmar Ratio",
+        "Max Drawdown %",
+        "Avg Drawdown %",
+        "Max Drawdown Duration",
+        "Avg Drawdown Duration",
+        "# Trades",
+        "Win Rate %",
+        "Best Trade %",
+        "Worst Trade %",
+        "Avg. Trade %",
+        "Max Trade Duration",
+        "Avg Trade Duration",

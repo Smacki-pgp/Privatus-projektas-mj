@@ -3,10 +3,9 @@ from binance.client import Client
 import time
 from config import Config
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from os import cpu_count
-from binance.exceptions import BinanceAPIException
+import asyncio
 import os
+from binance.exceptions import BinanceAPIException
 
 # Ensure logging directory exists
 log_dir = os.path.dirname(Config.LOG_FILE)
@@ -23,9 +22,60 @@ logging.basicConfig(
 
 client = Client(Config.API_KEY, Config.API_SECRET)
 
-def fetch_data(symbol, start_date, end_date, interval=Config.TIMEFRAME):
+def validate_symbol_and_interval(symbol, interval):
     """
-    Fetch historical OHLCV (Open, High, Low, Close, Volume) data for a given symbol using Binance API.
+    Validate the symbol and interval against Binance API supported values.
+
+    :param symbol: Trading pair symbol (e.g., 'SOLUSDT').
+    :param interval: Interval to validate (e.g., '1h').
+    :raises ValueError: If the symbol or interval is invalid.
+    """
+    info = client.get_exchange_info()
+    valid_symbols = {s['symbol'] for s in info['symbols']}
+    valid_intervals = [
+        '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h',
+        '6h', '8h', '12h', '1d', '3d', '1w', '1M'
+    ]
+
+    if symbol not in valid_symbols:
+        raise ValueError(f"Invalid symbol: {symbol}. Ensure it exists on Binance.")
+    if interval not in valid_intervals:
+        raise ValueError(f"Invalid interval: {interval}. Supported intervals: {valid_intervals}")
+
+def get_market_depth(symbol):
+    """
+    Fetch order book depth for a symbol.
+
+    :param symbol: Trading pair symbol (e.g., 'SOLUSDT').
+    :return: Dictionary containing bid and ask data.
+    """
+    try:
+        depth = client.get_order_book(symbol=symbol)
+        return {
+            'bids': depth['bids'],
+            'asks': depth['asks']
+        }
+    except BinanceAPIException as e:
+        logging.error(f"Error fetching market depth for {symbol}: {e}")
+        return {}
+
+def fetch_real_time_price(symbol):
+    """
+    Fetch the current real-time price of a symbol.
+
+    :param symbol: Trading pair symbol (e.g., 'SOLUSDT').
+    :return: Current price of the symbol.
+    """
+    try:
+        ticker = client.get_symbol_ticker(symbol=symbol)
+        return float(ticker['price'])
+    except BinanceAPIException as e:
+        logging.error(f"Error fetching real-time price for {symbol}: {e}")
+        return None
+
+async def fetch_data_async(symbol, start_date, end_date, interval=Config.TIMEFRAME):
+    """
+    Fetch historical OHLCV (Open, High, Low, Close, Volume) data for a given symbol using Binance API asynchronously.
 
     :param symbol: Trading pair symbol (e.g., 'SOLUSDT').
     :param start_date: Start date in 'YYYY-MM-DD' format.
@@ -34,190 +84,116 @@ def fetch_data(symbol, start_date, end_date, interval=Config.TIMEFRAME):
     :return: DataFrame with historical OHLCV data and additional metrics.
     """
     try:
-        # Ensure symbol and date parameters are valid
-        if not symbol:
-            raise ValueError("Symbol cannot be empty.")
-        if not start_date or not end_date:
-            raise ValueError("Start and end dates must be provided.")
+        validate_symbol_and_interval(symbol, interval)
 
-        # Step 1: Convert input dates to timestamps in milliseconds
         start_ts = int(pd.Timestamp(start_date).timestamp() * 1000)
         end_ts = int(pd.Timestamp(end_date).timestamp() * 1000)
-        logging.debug(f"Start timestamp: {start_ts}, End timestamp: {end_ts}, Symbol: {symbol}")
+        logging.debug(f"Fetching {symbol} from {pd.to_datetime(start_ts, unit='ms')} to {pd.to_datetime(end_ts, unit='ms')}.")
 
-        all_data = []  # List to accumulate data from all API requests
+        all_data = []
         current_ts = start_ts
-        iteration_limit = Config.ITERATION_LIMIT  # Limit to prevent infinite loops
+        retry_count = 0
 
-        # Step 2: Determine the chunk size for fetching data
-        if isinstance(Config.DATA_FETCH_CHUNK_SIZE, str):
-            chunk_size = Config.DATA_FETCH_CHUNK_SIZE
-            relative_mode = True  # Use Binance's relative date strings
-        elif isinstance(Config.DATA_FETCH_CHUNK_SIZE, int):
-            chunk_size = Config.DATA_FETCH_CHUNK_SIZE
-            relative_mode = False  # Use numeric chunk sizes in milliseconds
-        else:
-            raise ValueError("DATA_FETCH_CHUNK_SIZE must be an integer or a valid Binance-compatible string.")
-
-        retry_count = 0  # Counter for retry attempts
-        iteration_count = 0  # Track the number of iterations
-
-        # Step 3: Loop to fetch data in chunks until the end timestamp is reached
         while current_ts < end_ts:
-            if iteration_count >= iteration_limit:
-                logging.error(f"Iteration limit of {iteration_limit} reached for {symbol} after {iteration_count} iterations. Aborting to avoid infinite loop.")
-                break
-
-            iteration_count += 1
-
             try:
-                # Fetch data using Binance API
-                if relative_mode:
-                    klines = client.get_historical_klines(
-                        symbol, interval, f"{chunk_size} UTC", end_ts
-                    )
-                else:
-                    klines = client.get_historical_klines(
-                        symbol, interval, current_ts, min(current_ts + chunk_size, end_ts)
-                    )
+                klines = client.get_historical_klines(
+                    symbol, interval, current_ts, min(current_ts + Config.DATA_FETCH_CHUNK_SIZE, end_ts)
+                )
 
-                # Break loop if no data is returned
                 if not klines:
-                    logging.warning(f"No data returned for symbol {symbol} in this time range.")
-                    return pd.DataFrame()
+                    logging.warning(f"No data returned for {symbol} between {start_date} and {end_date}. Reducing time range and retrying.")
+                    # Adjust the range to fetch smaller chunks
+                    end_ts = current_ts + Config.DATA_FETCH_CHUNK_SIZE // 2
+                    continue
 
-                # Add the fetched data to the list
                 all_data.extend(klines)
+                current_ts = klines[-1][0] + 1
 
-                # Update the current timestamp to continue fetching next chunk
-                current_ts = klines[-1][0] + 1  # Move to the next available timestamp
-
-                # Debugging: Log a sample of the fetched data
                 if Config.DEBUG_MODE and klines:
-                    logging.debug(f"Sample kline data for {symbol}: {klines[0]}")
+                    logging.debug(f"Sample data for {symbol}: {klines[0]}")
 
-                # Periodic logging for large datasets
                 if len(all_data) % 1000 == 0:
                     logging.info(f"Fetched {len(all_data)} rows for {symbol} so far.")
 
             except BinanceAPIException as api_error:
-                # Handle Binance-specific errors, including rate limits
-                if api_error.code == -1003:  # Rate limit error
-                    logging.error("Rate limit exceeded. Retrying after delay...")
-                    time.sleep(min(60 * 2 ** retry_count, 600))  # Exponential backoff with a cap
-                else:
-                    logging.error(f"Binance API error: {api_error}")
+                if api_error.code == -1003:
+                    logging.error("Rate limit exceeded. Retrying...")
+                    await asyncio.sleep(min(60 * 2 ** retry_count, 600))
                     retry_count += 1
-                    if retry_count >= Config.MAX_API_RETRIES:
-                        logging.error(f"Max retries reached for {symbol}. Aborting.")
-                        return pd.DataFrame()
+                else:
+                    logging.error(f"Binance API error for {symbol}: {api_error}")
+                    break
+
             except Exception as e:
-                # Handle general errors and implement retry logic
-                logging.error(f"Error during Binance API call: {e}")
+                logging.error(f"Error during API call for {symbol}: {e}")
                 retry_count += 1
                 if retry_count >= Config.MAX_API_RETRIES:
                     logging.error(f"Max retries reached for {symbol}. Aborting.")
-                    return pd.DataFrame()
+                    break
 
-        # Step 4: Convert fetched data to a DataFrame for processing
-        try:
-            df = pd.DataFrame(all_data, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_asset_volume', 'number_of_trades',
-                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-            ])
+        df = pd.DataFrame(all_data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
 
-            # Return empty DataFrame if no data was fetched
-            if df.empty:
-                logging.warning(f"DataFrame for symbol {symbol} is empty after fetching.")
-                return df
-
-            # Process the DataFrame: Convert timestamps and retain relevant columns
-            try:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            except Exception as e:
-                logging.error(f"Error converting timestamps for {symbol}: {e}")
-                return pd.DataFrame()
-
-            df.set_index('timestamp', inplace=True)
-            df = df[['open', 'high', 'low', 'close', 'volume', 'quote_asset_volume', 'number_of_trades',
-                     'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume']].astype(float)
-
-            # Add additional metrics (e.g., average price, price range, and volatility)
-            df['average_price'] = (df['high'] + df['low']) / 2
-            df['price_range'] = df['high'] - df['low']
-            df['volatility'] = df['price_range'] / df['average_price'] * 100  # Percentage volatility
-
-            # Debugging: Log the structure of the processed DataFrame
-            if Config.DEBUG_MODE:
-                logging.debug(f"Processed DataFrame for {symbol} with {len(df)} rows:\n{df.head()}")
-
-            # Step 5: Check for missing or inconsistent data
-            if df.isnull().values.any():
-                logging.warning(f"DataFrame for {symbol} contains missing values. Consider handling them explicitly.")
-
+        if df.empty:
+            logging.warning(f"DataFrame for {symbol} is empty after fetching.")
             return df
 
-        except Exception as e:
-            logging.error(f"Error processing data for {symbol}: {e}")
-            return pd.DataFrame()
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df = df[['open', 'high', 'low', 'close', 'volume', 'quote_asset_volume', 'number_of_trades',
+                 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume']].astype(float)
+
+        df['average_price'] = (df['high'] + df['low']) / 2
+        df['price_range'] = df['high'] - df['low']
+        df['volatility'] = df['price_range'] / df['average_price'] * 100
+
+        if Config.DEBUG_MODE:
+            logging.debug(f"Processed DataFrame for {symbol} with {len(df)} rows:\n{df.head()}")
+
+        return df
 
     except Exception as e:
-        # Log errors and return an empty DataFrame in case of failure
         logging.error(f"Error fetching data for {symbol}: {e}")
         return pd.DataFrame()
 
-def fetch_multiple_symbols(symbols, start_date, end_date):
+async def fetch_multiple_symbols_async(symbols, start_date, end_date):
     """
-    Fetch data for multiple symbols concurrently.
+    Fetch data for multiple symbols concurrently using asyncio.
 
     :param symbols: List of symbols to fetch data for.
     :param start_date: Start date for all symbols.
     :param end_date: End date for all symbols.
     :return: Dictionary of DataFrames indexed by symbol.
     """
-    # Determine the number of threads to use for concurrent fetching
-    max_workers = Config.MAX_WORKERS if Config.USE_MULTITHREADING else 1
-    results = {}
+    tasks = [fetch_data_async(symbol, start_date, end_date) for symbol in symbols]
+    results = await asyncio.gather(*tasks)
 
-    # Use ThreadPoolExecutor to fetch data concurrently
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(fetch_data, symbol, start_date, end_date): symbol
-            for symbol in symbols
-        }
+    return {symbol: result for symbol, result in zip(symbols, results)}
 
-        for future in futures:
-            symbol = futures[future]
-            logging.info(f"Starting data fetch for {symbol} from {start_date} to {end_date}.")  # Log the start of fetching with time range
-            try:
-                result = future.result()
-                if result.empty:
-                    logging.warning(f"No data fetched for {symbol}.")
-                else:
-                    results[symbol] = result
-                    # Debugging: Validate fetched data
-                    if Config.DEBUG_MODE:
-                        logging.debug(f"Data fetched for {symbol}: {len(result)} rows.")
-            except Exception as e:
-                # Log errors encountered during concurrent fetching
-                logging.error(f"Error fetching data for {symbol}: {e}")
-    return results
+def check_rate_limit():
+    """
+    Monitor the API rate limit usage using the `X-MBX-USED-WEIGHT` header.
+    """
+    headers = client.response.headers
+    rate_limit_used = headers.get("X-MBX-USED-WEIGHT-1M", None)
+    if rate_limit_used:
+        logging.info(f"Current rate limit usage: {rate_limit_used}")
 
 if __name__ == "__main__":
-    # Example configuration for testing
     symbols = [Config.SYMBOL, Config.BENCHMARK_SYMBOL]
-    start_date = "2023-01-01"
-    end_date = "2023-01-10"  # Adjusted to fetch more timestamps
+    start_date = Config.START_DATE
+    end_date = Config.END_DATE
 
     print("Fetching data for symbols...")
-    data = fetch_multiple_symbols(symbols, start_date, end_date)
+    data = asyncio.run(fetch_multiple_symbols_async(symbols, start_date, end_date))
 
-    # Step 7: Validate output and save to CSV
     for symbol, df in data.items():
         if not df.empty:
             print(f"Fetched data for {symbol}: {len(df)} rows.")
             df.to_csv(f"{symbol}_data.csv", index=True)
-            logging.info(f"Saved {symbol} data to {symbol}_data.csv.")
+            logging.info(f"Saved data for {symbol} to {symbol}_data.csv.")
         else:
             logging.warning(f"No data fetched for {symbol}.")

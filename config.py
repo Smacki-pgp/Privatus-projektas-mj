@@ -1,104 +1,88 @@
-import logging
-import os
+# Configurations for Binance API and Data Fetching
 
 class Config:
-    """
-    Configuration settings for the trading system.
-    Adjust these parameters based on your environment and preferences.
-    """
+    # Binance API keys (replace with your own keys)
+    API_KEY = "yhsdzPJNebDuyxoFsHEZQ32Zuo5grZCvlqhShJilQVBvvSApe4tnVGdl94TsU32CO"
+    API_SECRET = "sluOlqJuqstECUXIFQYAiXGpUA08QPGQ6jERRx1ZglSvGYE4ghwsrub3btdQcCgR"
 
-    # Binance API Credentials (Set these securely via environment variables)
-    API_KEY = os.getenv("BINANCE_API_KEY", "yhsdzPJNebDuyxoFsHEZQ32Zuo5grZCvlqhShJilQVBvvSApe4tnVGdl94TsU32CO")
-    API_SECRET = os.getenv("BINANCE_API_SECRET", "sluOlqJuqstECUXIFQYAiXGpUA08QPGQ6jERRx1ZglSvGYE4ghwsrub3btdQcCgR")
+    # Logging configuration
+    LOG_FILE = "logs/data_fetcher.log"
+    DEBUG_MODE = True  # Set to False in production
 
-    # Logging Configuration
-    LOG_FILE = "trading_system.log"  # Path to the log file
-    DEBUG_MODE = True  # Set to False for production to reduce log verbosity
+    # Default trading pairs and time settings
+    SYMBOL = "SOLUSDT"  # Main symbol to fetch data for
+    BENCHMARK_SYMBOL = "BTCUSDT"  # Secondary symbol for comparisons
+    START_DATE = "2023-01-01"  # Start date for historical data
+    END_DATE = "2023-02-06"  # End date for historical data
+    TIMEFRAME = "1h"  # Data interval
 
-    # Data Fetching Parameters
-    TIMEFRAME = "1h"  # Time interval for data fetching (e.g., '1h', '1d')
-    START_DATE = "2023-01-01"  # Start date for historical data fetching (YYYY-MM-DD)
-    END_DATE = "2023-12-31"  # End date for historical data fetching (YYYY-MM-DD)
-    DATA_FETCH_CHUNK_SIZE = 1000  # Max data points per API call (int or Binance-compatible string)
-    MAX_API_RETRIES = 5  # Number of retries for API errors
-    USE_MULTITHREADING = True  # Use multithreading to fetch data for multiple symbols concurrently
-    MAX_WORKERS = 4  # Number of threads for concurrent fetching
-    ITERATION_LIMIT = 1000  # Limit the number of iterations during data fetching
+    # Data fetching configuration
+    DATA_FETCH_CHUNK_SIZE = 60 * 60 * 1000  # Chunk size in milliseconds (default 1 hour per fetch)
+    MAX_API_RETRIES = 5  # Max retries for API calls
 
-    # Symbols and Benchmarks
-    SYMBOL = "SOLUSDT"  # Primary trading pair
-    BENCHMARK_SYMBOL = "BTCUSDT"  # Benchmark trading pair for comparison
+    # Multithreading and rate limit handling
+    MAX_CONCURRENT_REQUESTS = 10  # Maximum concurrent API calls
+    RATE_LIMIT_CHECK_INTERVAL = 60  # Interval in seconds to check rate limits
 
-    # Backtesting Parameters
-    INITIAL_BALANCE = 10000.0  # Starting portfolio balance in USD
-    TRADING_FEES = 0.001  # Trading fee as a percentage (e.g., 0.1% = 0.001)
+    # CSV Output
+    SAVE_CSV = True  # Set to False if you don't want to save fetched data as CSV
+    OUTPUT_DIR = "output/"  # Directory to save CSV files
 
-    # Strategy Parameters
-    ACTIVE_STRATEGY = "RRS"  # Current active strategy (e.g., 'RRS')
-    RRS_BUY_THRESHOLD = 1.02  # RRS threshold to trigger a buy signal
-    RRS_SELL_THRESHOLD = 0.98  # RRS threshold to trigger a sell signal
+    # Advanced configurations
+    USE_WEBSOCKETS = False  # Enable WebSocket support for live data
+    RATE_LIMIT_WARNING_THRESHOLD = 80  # Percentage of rate limit usage to trigger warnings
+    DATABASE_ENABLED = False  # If True, save data to a database instead of CSV
+    DATABASE_URI = "sqlite:///data_fetcher.db"  # Database connection URI (e.g., SQLite, PostgreSQL)
 
-    # Output Settings
-    OUTPUT_DIRECTORY = "data_output"  # Directory to save output CSVs and results
-
-    # Metrics Configuration (For detailed backtesting analytics)
-    METRICS_TO_CALCULATE = [
-        "Duration",
-        "Exposure Time %",
-        "Equity Final",
-        "Equity Peak",
-        "Return %",
-        "Buy and Hold Return %",
-        "Return Annual %",
-        "Volatility Annual %",
-        "Sharpe Ratio",
-        "Sortino Ratio",
-        "Calmar Ratio",
-        "Max Drawdown %",
-        "Avg Drawdown %",
-        "Max Drawdown Duration",
-        "Avg Drawdown Duration",
-        "# Trades",
-        "Win Rate %",
-        "Best Trade %",
-        "Worst Trade %",
-        "Avg. Trade %",
-        "Max Trade Duration",
-        "Avg Trade Duration",
-    ]
+    # Derived settings
+    @staticmethod
+    def create_directories():
+        import os
+        try:
+            # Ensure directories exist for logs and output
+            if not os.path.exists(Config.LOG_FILE):
+                os.makedirs(os.path.dirname(Config.LOG_FILE), exist_ok=True)
+            if Config.SAVE_CSV and not os.path.exists(Config.OUTPUT_DIR):
+                os.makedirs(Config.OUTPUT_DIR, exist_ok=True)
+        except Exception as e:
+            raise RuntimeError(f"Error creating directories: {e}")
 
     @staticmethod
-    def validate():
+    def validate_api_keys():
         """
-        Validate essential configurations to ensure correctness before execution.
+        Validate that API keys are provided.
         """
-        if not Config.API_KEY:
-            logging.error("API_KEY is not set. Ensure you set it via environment variables or directly in the config.")
-        if not Config.API_SECRET:
-            logging.error("API_SECRET is not set. Ensure you set it via environment variables or directly in the config.")
+        if not Config.API_KEY or not Config.API_SECRET:
+            raise ValueError("API_KEY and API_SECRET must be set in the configuration.")
 
-        assert Config.TIMEFRAME in ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"], (
-            f"Invalid TIMEFRAME: {Config.TIMEFRAME}. Choose a valid Binance interval."
-        )
-        assert isinstance(Config.DATA_FETCH_CHUNK_SIZE, (int, str)), (
-            "DATA_FETCH_CHUNK_SIZE must be an integer or a Binance-compatible string."
-        )
-        assert Config.SYMBOL, "SYMBOL must be defined."
-        assert Config.BENCHMARK_SYMBOL, "BENCHMARK_SYMBOL must be defined."
+    @staticmethod
+    def validate_timeframe():
+        """
+        Validate the specified timeframe is supported by Binance.
+        """
+        valid_intervals = [
+            '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h',
+            '6h', '8h', '12h', '1d', '3d', '1w', '1M'
+        ]
+        if Config.TIMEFRAME not in valid_intervals:
+            raise ValueError(f"Invalid TIMEFRAME: {Config.TIMEFRAME}. Supported intervals: {valid_intervals}")
 
-        # Create output directory if it doesn't exist
-        if not os.path.exists(Config.OUTPUT_DIRECTORY):
-            try:
-                os.makedirs(Config.OUTPUT_DIRECTORY)
-            except OSError as e:
-                logging.error(f"Failed to create output directory {Config.OUTPUT_DIRECTORY}: {e}")
-                raise
+    @staticmethod
+    def validate_date_range():
+        """
+        Validate the date range to ensure the start date is earlier than the end date.
+        """
+        from datetime import datetime
+        try:
+            start_date = datetime.strptime(Config.START_DATE, "%Y-%m-%d")
+            end_date = datetime.strptime(Config.END_DATE, "%Y-%m-%d")
+            if start_date >= end_date:
+                raise ValueError("START_DATE must be earlier than END_DATE.")
+        except Exception as e:
+            raise ValueError(f"Invalid date range: {e}")
 
-        logging.info("Configuration validation successful.")
-
-# Execute validation on import
-try:
-    Config.validate()
-except AssertionError as e:
-    logging.error(f"Configuration validation failed: {e}")
-    raise
+# Ensure necessary directories are created and configurations are validated
+Config.create_directories()
+Config.validate_api_keys()
+Config.validate_timeframe()
+Config.validate_date_range()
